@@ -1,0 +1,285 @@
+"""NumberHub - small Flask app: accounts, wallet ledger, number requests, SMS inbox.
+Modes: demo (default, no credentials, all data labelled DEMO), live (Africa's Talking), unconfigured."""
+import hmac, os, re, secrets, sqlite3
+from datetime import datetime, timezone
+from functools import wraps
+from flask import (Flask, abort, current_app, flash, g, jsonify, redirect,
+                   render_template, request, session, url_for)
+from werkzeug.security import check_password_hash, generate_password_hash
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+  amount_cents INTEGER NOT NULL, kind TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS numbers(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+  number TEXT UNIQUE NOT NULL, is_demo INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, number_id INTEGER NOT NULL REFERENCES numbers(id),
+  sender TEXT NOT NULL, body TEXT NOT NULL, is_demo INTEGER NOT NULL, provider_id TEXT, received_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_provider ON messages(provider_id) WHERE provider_id IS NOT NULL;
+"""
+LIVE_VARS = ["AT_USERNAME", "AT_API_KEY", "AT_NUMBER", "WEBHOOK_SECRET"]
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def provider():
+    """Read provider config from the environment on every call. Never returns secret values."""
+    env = {k: os.environ.get(k, "").strip() for k in LIVE_VARS}
+    missing = [k for k, v in env.items() if not v]
+    if os.environ.get("DEMO_MODE", "1") != "0":
+        return {"mode": "demo", "missing": missing, "number": "",
+                "message": "DEMO mode: numbers and messages are simulated and labelled DEMO."}
+    if missing:
+        return {"mode": "unconfigured", "missing": missing, "number": "",
+                "message": "Provider not configured. Missing environment variables: "
+                           + ", ".join(missing) + ". Set them, or set DEMO_MODE=1 to try the app with DEMO data."}
+    return {"mode": "live", "missing": [], "number": env["AT_NUMBER"],
+            "message": "Live mode: Africa's Talking credentials found."}
+
+
+def db():
+    if "db" not in g:
+        g.db = sqlite3.connect(current_app.config["DATABASE"], isolation_level=None)
+        g.db.row_factory = sqlite3.Row
+        g.db.execute("PRAGMA foreign_keys=ON")
+    return g.db
+
+
+def balance(d, uid):
+    return d.execute("SELECT COALESCE(SUM(amount_cents),0) FROM ledger WHERE user_id=?", (uid,)).fetchone()[0]
+
+
+def create_app(config=None):
+    app = Flask(__name__)
+    app.config.update(
+        SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
+        DATABASE=os.environ.get("DATABASE_PATH", os.path.join(app.instance_path, "numberhub.db")),
+        NUMBER_PRICE_CENTS=int(os.environ.get("NUMBER_PRICE_CENTS", "100")),
+        DEMO_CREDIT_CENTS=500,
+        SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+    if config:
+        app.config.update(config)
+    os.makedirs(os.path.dirname(os.path.abspath(app.config["DATABASE"])), exist_ok=True)
+    boot = sqlite3.connect(app.config["DATABASE"])
+    boot.executescript(SCHEMA)
+    boot.close()
+
+    def csrf_token():
+        if "csrf" not in session:
+            session["csrf"] = secrets.token_hex(16)
+        return session["csrf"]
+
+    app.jinja_env.globals.update(csrf_token=csrf_token, provider=provider)
+    app.jinja_env.filters["money"] = lambda c: "%.2f" % (c / 100)
+
+    @app.teardown_appcontext
+    def close(_):
+        d = g.pop("db", None)
+        if d is not None:
+            d.close()
+
+    @app.before_request
+    def load_user():
+        g.user = None
+        if session.get("uid"):
+            g.user = db().execute("SELECT id,email FROM users WHERE id=?", (session["uid"],)).fetchone()
+        if request.method == "POST" and request.endpoint != "webhook_sms":
+            if not hmac.compare_digest(session.get("csrf", "x"), request.form.get("csrf_token", "")):
+                abort(400, "Invalid or missing form token. Reload the page and try again.")
+
+    def login_required(f):
+        @wraps(f)
+        def w(*a, **k):
+            if not g.user:
+                return redirect(url_for("login"))
+            return f(*a, **k)
+        return w
+
+    @app.get("/health")
+    def health():
+        db().execute("SELECT 1")
+        return jsonify(status="ok", mode=provider()["mode"])
+
+    @app.get("/")
+    def index():
+        return redirect(url_for("dashboard" if g.user else "login"))
+
+    @app.route("/register", methods=["GET", "POST"])
+    def register():
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            pw = request.form.get("password", "")
+            if not EMAIL_RE.match(email):
+                flash("Enter a valid email address.", "error")
+            elif len(pw) < 8:
+                flash("Password must be at least 8 characters.", "error")
+            else:
+                try:
+                    db().execute("INSERT INTO users(email,password_hash,created_at) VALUES(?,?,?)",
+                                 (email, generate_password_hash(pw), now()))
+                except sqlite3.IntegrityError:
+                    flash("That email is already registered.", "error")
+                else:
+                    flash("Account created. Please log in.", "ok")
+                    return redirect(url_for("login"))
+        return render_template("register.html")
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            u = db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+            if u and check_password_hash(u["password_hash"], request.form.get("password", "")):
+                session.clear()
+                session["uid"] = u["id"]
+                return redirect(url_for("dashboard"))
+            flash("Incorrect email or password.", "error")
+        return render_template("login.html")
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
+    @app.get("/dashboard")
+    @login_required
+    def dashboard():
+        d = db()
+        led = d.execute("SELECT * FROM ledger WHERE user_id=? ORDER BY id DESC LIMIT 20", (g.user["id"],)).fetchall()
+        n = d.execute("SELECT COUNT(*) FROM numbers WHERE user_id=?", (g.user["id"],)).fetchone()[0]
+        return render_template("dashboard.html", bal=balance(d, g.user["id"]), ledger=led, count=n,
+                               price=app.config["NUMBER_PRICE_CENTS"])
+
+    @app.post("/wallet/demo-credit")
+    @login_required
+    def demo_credit():
+        if provider()["mode"] != "demo":
+            flash("Demo credit is only available in DEMO mode. Real top-ups are not part of this version.", "error")
+        else:
+            db().execute("INSERT INTO ledger(user_id,amount_cents,kind,note,created_at) VALUES(?,?,?,?,?)",
+                         (g.user["id"], app.config["DEMO_CREDIT_CENTS"], "demo_credit", "DEMO credit (not real money)", now()))
+            flash("DEMO credit added.", "ok")
+        return redirect(url_for("dashboard"))
+
+    @app.get("/request")
+    @login_required
+    def request_page():
+        return render_template("request.html", price=app.config["NUMBER_PRICE_CENTS"],
+                               bal=balance(db(), g.user["id"]))
+
+    @app.post("/request")
+    @login_required
+    def request_number():
+        p, price, d = provider(), app.config["NUMBER_PRICE_CENTS"], db()
+        back = redirect(url_for("request_page"))
+        if p["mode"] == "unconfigured":
+            flash(p["message"], "error")
+            return back
+        d.execute("BEGIN IMMEDIATE")
+        try:
+            err = None
+            if balance(d, g.user["id"]) < price:
+                err = "Insufficient wallet balance for this request."
+            elif p["mode"] == "demo":
+                number, is_demo = None, 1
+                while number is None or d.execute("SELECT 1 FROM numbers WHERE number=?", (number,)).fetchone():
+                    number = "DEMO-%06d" % secrets.randbelow(10**6)
+            else:
+                number, is_demo = p["number"], 0
+                if d.execute("SELECT 1 FROM numbers WHERE number=?", (number,)).fetchone():
+                    err = ("The account's Africa's Talking number is already assigned. Automated provisioning of "
+                           "new numbers is not supported by this app; add numbers in your Africa's Talking dashboard.")
+            if err:
+                d.execute("ROLLBACK")
+                flash(err, "error")
+                return back
+            d.execute("INSERT INTO numbers(user_id,number,is_demo,status,created_at) VALUES(?,?,?,?,?)",
+                      (g.user["id"], number, is_demo, "active", now()))
+            if price > 0:
+                d.execute("INSERT INTO ledger(user_id,amount_cents,kind,note,created_at) VALUES(?,?,?,?,?)",
+                          (g.user["id"], -price, "number_request", "Number request " + number, now()))
+            d.execute("COMMIT")
+        except Exception:
+            d.execute("ROLLBACK")
+            raise
+        flash(("DEMO number %s created (simulated, not a real number)." if is_demo else "Number %s assigned.") % number, "ok")
+        return redirect(url_for("history"))
+
+    @app.get("/history")
+    @login_required
+    def history():
+        rows = db().execute("SELECT * FROM numbers WHERE user_id=? ORDER BY id DESC", (g.user["id"],)).fetchall()
+        return render_template("history.html", rows=rows)
+
+    def inbox_rows(uid):
+        return db().execute(
+            "SELECT m.id,m.sender,m.body,m.is_demo,m.received_at,n.number FROM messages m "
+            "JOIN numbers n ON n.id=m.number_id WHERE n.user_id=? ORDER BY m.id DESC LIMIT 100", (uid,)).fetchall()
+
+    @app.get("/inbox")
+    @login_required
+    def inbox():
+        nums = db().execute("SELECT * FROM numbers WHERE user_id=? AND is_demo=1", (g.user["id"],)).fetchall()
+        return render_template("inbox.html", msgs=inbox_rows(g.user["id"]), demo_numbers=nums)
+
+    @app.get("/api/messages")
+    @login_required
+    def api_messages():
+        return jsonify([dict(r) for r in inbox_rows(g.user["id"])])
+
+    @app.post("/demo/simulate")
+    @login_required
+    def simulate():
+        if provider()["mode"] != "demo":
+            flash("Simulated messages are only available in DEMO mode.", "error")
+            return redirect(url_for("inbox"))
+        n = db().execute("SELECT id FROM numbers WHERE id=? AND user_id=? AND is_demo=1",
+                         (request.form.get("number_id", type=int), g.user["id"])).fetchone()
+        if not n:
+            flash("Choose one of your DEMO numbers.", "error")
+        else:
+            db().execute("INSERT INTO messages(number_id,sender,body,is_demo,received_at) VALUES(?,?,?,?,?)",
+                         (n["id"], "DEMO-SENDER", "DEMO message: simulated text, not a real SMS.", 1, now()))
+            flash("DEMO message added.", "ok")
+        return redirect(url_for("inbox"))
+
+    @app.get("/provider")
+    @login_required
+    def provider_page():
+        p = provider()
+        status = {k: bool(os.environ.get(k, "").strip()) for k in LIVE_VARS}  # set/unset only, never values
+        return render_template("provider.html", p=p, status=status,
+                               webhook=url_for("webhook_sms", _external=True) + "?secret=YOUR_WEBHOOK_SECRET")
+
+    @app.post("/webhook/sms")
+    def webhook_sms():
+        """Africa's Talking inbound SMS callback (form fields: from, to, text, id, date)."""
+        p = provider()
+        secret = os.environ.get("WEBHOOK_SECRET", "")
+        if p["mode"] != "live":
+            return jsonify(error="Webhook disabled: provider not in live mode / not configured."), 503
+        if not hmac.compare_digest(secret, request.args.get("secret", "")):
+            return jsonify(error="forbidden"), 403
+        to, sender = request.form.get("to", "").strip(), request.form.get("from", "").strip()
+        text, mid = request.form.get("text", ""), request.form.get("id") or None
+        n = db().execute("SELECT id FROM numbers WHERE number=? AND is_demo=0", (to,)).fetchone()
+        if not n or not sender:
+            return jsonify(status="ignored"), 200
+        try:
+            db().execute("INSERT INTO messages(number_id,sender,body,is_demo,provider_id,received_at) VALUES(?,?,?,?,?,?)",
+                         (n["id"], sender, text, 0, mid, now()))
+        except sqlite3.IntegrityError:
+            pass  # duplicate delivery
+        return jsonify(status="ok"), 200
+
+    return app
+
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))

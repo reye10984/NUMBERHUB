@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NumberHub</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body>
+<header><a class="brand" href="/">NumberHub</a>
+{% if g.user %}<nav>
+<a href="{{ url_for('dashboard') }}">Dashboard</a><a href="{{ url_for('request_page') }}">Request</a>
+<a href="{{ url_for('history') }}">History</a><a href="{{ url_for('inbox') }}">Inbox</a>
+<a href="{{ url_for('provider_page') }}">Provider</a>
+<form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link">Log out</button></form>
+</nav>{% endif %}</header>
+<main>
+{% if provider().mode == 'demo' %}<div class="banner demo">DEMO MODE: all numbers, credit and messages are simulated.</div>
+{% elif provider().mode == 'unconfigured' %}<div class="banner err">{{ provider().message }}</div>{% endif %}
+{% for c, m in get_flashed_messages(with_categories=true) %}<div class="flash {{ c }}">{{ m }}</div>{% endfor %}
+{% block body %}{% endblock %}
+</main><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

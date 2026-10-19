@@ -1,0 +1,4 @@
+NumberHub - minimal Flask/SQLite app (stage 1). Unzip, then read README.md.
+Contents: app.py, templates/, static/, tests/, requirements.txt, Procfile, .env.example, .gitignore, README.md, HANDOFF.md.
+Excluded: real .env files, credentials, virtualenvs, __pycache__, databases.
+Quick start: pip install -r requirements.txt && python app.py  (DEMO mode, no credentials needed)

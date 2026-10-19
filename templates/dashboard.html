@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block body %}<h1>Dashboard</h1>
+<div class="card"><p class="big">{{ bal|money }} credits</p><p>Balance (calculated on the server from your ledger). Numbers: {{ count }}. Price per number: {{ price|money }}.</p>
+{% if provider().mode == 'demo' %}<form method="post" action="{{ url_for('demo_credit') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Add DEMO credit</button></form>{% endif %}</div>
+<h2>Wallet ledger</h2>
+<div class="scroll"><table><tr><th>Date (UTC)</th><th>Type</th><th>Note</th><th>Amount</th></tr>
+{% for l in ledger %}<tr><td>{{ l.created_at }}</td><td>{{ l.kind }}</td><td>{{ l.note }}</td><td>{{ l.amount_cents|money }}</td></tr>
+{% else %}<tr><td colspan="4">No entries yet.</td></tr>{% endfor %}</table></div>{% endblock %}
