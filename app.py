@@ -1,6 +1,6 @@
 """NumberHub - small Flask app: accounts, wallet ledger, number requests, SMS inbox.
 Modes: demo (default, no credentials, all data labelled DEMO), live (Africa's Talking), unconfigured."""
-import hmac, os, re, secrets, sqlite3
+import hmac, json, os, re, secrets, sqlite3, time, urllib.request
 from datetime import datetime, timezone
 from functools import wraps
 from flask import (Flask, abort, current_app, flash, g, jsonify, redirect,
@@ -17,6 +17,17 @@ CREATE TABLE IF NOT EXISTS numbers(id INTEGER PRIMARY KEY, user_id INTEGER NOT N
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, number_id INTEGER NOT NULL REFERENCES numbers(id),
   sender TEXT NOT NULL, body TEXT NOT NULL, is_demo INTEGER NOT NULL, provider_id TEXT, received_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_provider ON messages(provider_id) WHERE provider_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS telegram_links(
+  telegram_user_id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+  linked_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS telegram_link_codes(
+  code TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  expires_at INTEGER NOT NULL
+);
+
 """
 LIVE_VARS = ["AT_USERNAME", "AT_API_KEY", "AT_NUMBER", "WEBHOOK_SECRET"]
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -87,7 +98,7 @@ def create_app(config=None):
         g.user = None
         if session.get("uid"):
             g.user = db().execute("SELECT id,email FROM users WHERE id=?", (session["uid"],)).fetchone()
-        if request.method == "POST" and request.endpoint != "webhook_sms":
+        if request.method == "POST" and request.endpoint not in ("webhook_sms", "telegram_webhook"):
             if not hmac.compare_digest(session.get("csrf", "x"), request.form.get("csrf_token", "")):
                 abort(400, "Invalid or missing form token. Reload the page and try again.")
 
@@ -275,6 +286,168 @@ def create_app(config=None):
         except sqlite3.IntegrityError:
             pass  # duplicate delivery
         return jsonify(status="ok"), 200
+
+
+    def telegram_send(chat_id, message, token):
+        payload = json.dumps({"chat_id": chat_id, "text": message}).encode()
+        req = urllib.request.Request(
+            "https://api.telegram.org/bot" + token + "/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as response:
+                return response.status == 200
+        except Exception:
+            app.logger.warning("Telegram sendMessage failed.")
+            return False
+
+    @app.get("/telegram/link")
+    @login_required
+    def telegram_link_page():
+        d = db()
+        d.execute(
+            "DELETE FROM telegram_link_codes WHERE expires_at < ?",
+            (int(time.time()),),
+        )
+        code = secrets.token_hex(4).upper()
+        d.execute(
+            "INSERT INTO telegram_link_codes(code,user_id,expires_at) "
+            "VALUES(?,?,?)",
+            (code, g.user["id"], int(time.time()) + 600),
+        )
+        return render_template("telegram_link.html", code=code)
+
+    @app.post("/telegram/webhook")
+    def telegram_webhook():
+        expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+        supplied = request.headers.get(
+            "X-Telegram-Bot-Api-Secret-Token", ""
+        )
+        if not expected or not hmac.compare_digest(expected, supplied):
+            return jsonify(error="forbidden"), 403
+
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            return jsonify(error="bot not configured"), 503
+
+        update = request.get_json(silent=True) or {}
+        message = update.get("message") or {}
+        chat = message.get("chat") or {}
+        sender = message.get("from") or {}
+        text = (message.get("text") or "").strip()
+
+        if chat.get("type") != "private" or not sender.get("id") or not text:
+            return jsonify(ok=True)
+
+        chat_id = chat.get("id")
+        telegram_id = str(sender["id"])
+        parts = text.split(maxsplit=1)
+        command = parts[0].split("@")[0].lower()
+        argument = parts[1].strip().upper() if len(parts) > 1 else ""
+
+        if command in ("/start", "/help"):
+            reply = (
+                "Welcome to NOVA NUMBER HUB!\n\n"
+                "Commands: /link CODE, /account, /balance, "
+                "/requests, /support.\n"
+                "Balances and numbers may be DEMO simulations."
+            )
+
+        elif command == "/link":
+            if not re.fullmatch(r"[A-F0-9]{8}", argument):
+                reply = (
+                    "Log in to NumberHub, open /telegram/link, then "
+                    "send /link CODE here. The code expires in 10 minutes."
+                )
+            else:
+                d = db()
+                d.execute("BEGIN IMMEDIATE")
+                row = d.execute(
+                    "SELECT user_id FROM telegram_link_codes "
+                    "WHERE code=? AND expires_at>=?",
+                    (argument, int(time.time())),
+                ).fetchone()
+
+                if not row:
+                    d.execute("ROLLBACK")
+                    reply = "Invalid or expired code. Generate a new one on the website."
+                else:
+                    uid = row["user_id"]
+                    by_tg = d.execute(
+                        "SELECT user_id FROM telegram_links WHERE telegram_user_id=?",
+                        (telegram_id,),
+                    ).fetchone()
+                    by_user = d.execute(
+                        "SELECT telegram_user_id FROM telegram_links WHERE user_id=?",
+                        (uid,),
+                    ).fetchone()
+
+                    if by_tg or by_user:
+                        if (by_tg and by_user
+                                and by_tg["user_id"] == uid
+                                and by_user["telegram_user_id"] == telegram_id):
+                            reply = "Your Telegram account is already linked."
+                            d.execute(
+                                "DELETE FROM telegram_link_codes WHERE code=?",
+                                (argument,),
+                            )
+                            d.execute("COMMIT")
+                        else:
+                            d.execute("ROLLBACK")
+                            reply = "An account is already linked. Contact website support."
+                    else:
+                        d.execute(
+                            "INSERT INTO telegram_links "
+                            "(telegram_user_id,user_id,linked_at) VALUES(?,?,?)",
+                            (telegram_id, uid, now()),
+                        )
+                        d.execute(
+                            "DELETE FROM telegram_link_codes WHERE code=?",
+                            (argument,),
+                        )
+                        d.execute("COMMIT")
+                        reply = "Account linked! Try /account, /balance, or /requests."
+
+        elif command in ("/account", "/balance", "/requests"):
+            d = db()
+            linked = d.execute(
+                "SELECT u.id,u.email FROM telegram_links t "
+                "JOIN users u ON u.id=t.user_id WHERE t.telegram_user_id=?",
+                (telegram_id,),
+            ).fetchone()
+
+            if not linked:
+                reply = "Your account is not linked. Follow the /link instructions."
+            elif command == "/account":
+                reply = "Linked NumberHub account: " + linked["email"]
+            elif command == "/balance":
+                cents = balance(d, linked["id"])
+                label = "DEMO wallet balance" if provider()["mode"] == "demo" else "Wallet balance"
+                reply = "%s: %.2f credits" % (label, cents / 100)
+            else:
+                rows = d.execute(
+                    "SELECT number,is_demo,status,created_at FROM numbers "
+                    "WHERE user_id=? ORDER BY id DESC LIMIT 10",
+                    (linked["id"],),
+                ).fetchall()
+                reply = "\n".join(
+                    "%s%s — %s — %s" % (
+                        item["number"],
+                        " [DEMO]" if item["is_demo"] else "",
+                        item["status"], item["created_at"],
+                    )
+                    for item in rows
+                ) if rows else "You have no number requests yet."
+
+        elif command == "/support":
+            reply = "NOVA NUMBER HUB support: visit the NumberHub website for contact information."
+        else:
+            reply = "Unknown command. Send /help."
+
+        telegram_send(chat_id, reply, token)
+        return jsonify(ok=True)
 
     return app
 
