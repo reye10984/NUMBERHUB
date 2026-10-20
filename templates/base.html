@@ -7,7 +7,7 @@
 {% if g.user %}<nav>
 <a href="{{ url_for('dashboard') }}">Dashboard</a><a href="{{ url_for('request_page') }}">Request</a>
 <a href="{{ url_for('history') }}">History</a><a href="{{ url_for('inbox') }}">Inbox</a>
-<a href="{{ url_for('provider_page') }}">Provider</a>
+<a href="{{ url_for('provider_page') }}">Provider</a><a href="{{ url_for('five_sim_catalogue') }}">5SIM Catalogue</a>
 <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link">Log out</button></form>
 </nav>{% endif %}</header>
 <main>

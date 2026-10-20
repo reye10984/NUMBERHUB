@@ -1,0 +1,96 @@
+"""Safe 5SIM API client. This module does not purchase numbers."""
+
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+API_BASE = "https://5sim.net/v1"
+
+
+class FiveSimError(Exception):
+    """A safe, user-facing 5SIM API error."""
+
+
+def api_request(path, authenticated=False):
+    """Make a bounded-time GET request to the 5SIM API."""
+    if not path.startswith("/") or ".." in path.split("/"):
+        raise FiveSimError("Invalid API path.")
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "NOVA-NUMBER-HUB/1.0",
+    }
+
+    if authenticated:
+        api_key = os.environ.get("FIVE_SIM_API_KEY", "").strip()
+        if not api_key:
+            raise FiveSimError("The 5SIM API key is not configured.")
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(
+        API_BASE + path,
+        headers=headers,
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=12) as response:
+            if response.status != 200:
+                raise FiveSimError(
+                    f"5SIM returned HTTP status {response.status}."
+                )
+            return json.loads(response.read().decode("utf-8"))
+
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403) and authenticated:
+            raise FiveSimError(
+                "5SIM authentication failed. Check the API key in Render."
+            ) from None
+        if exc.code in (401, 403):
+            raise FiveSimError(
+                f"5SIM rejected the unauthenticated catalogue request (HTTP {exc.code})."
+            ) from None
+        if exc.code == 429:
+            raise FiveSimError(
+                "5SIM rate limit reached. Try again later."
+            ) from None
+        raise FiveSimError(
+            f"5SIM returned HTTP status {exc.code}."
+        ) from None
+
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise FiveSimError(
+            "Could not connect to 5SIM. Please try again later."
+        ) from None
+
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise FiveSimError(
+            "5SIM returned an unreadable response."
+        ) from None
+
+
+def configured():
+    """Return whether an API key exists without exposing it."""
+    return bool(os.environ.get("FIVE_SIM_API_KEY", "").strip())
+
+
+def get_profile():
+    """Retrieve the authenticated account profile."""
+    return api_request("/user/profile", authenticated=True)
+
+
+def get_countries():
+    """Retrieve the public country catalogue."""
+    return api_request("/guest/countries")
+
+
+def get_products(country, operator="any"):
+    """Retrieve products for a country and operator."""
+    country = urllib.parse.quote(str(country), safe="")
+    operator = urllib.parse.quote(str(operator), safe="")
+    return api_request(
+        f"/guest/products/{country}/{operator}"
+    )

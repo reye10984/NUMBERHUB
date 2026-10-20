@@ -266,6 +266,51 @@ def create_app(config=None):
         return render_template("provider.html", p=p, status=status,
                                webhook=url_for("webhook_sms", _external=True) + "?secret=YOUR_WEBHOOK_SECRET")
 
+    @app.get("/catalogue")
+    @login_required
+    def five_sim_catalogue():
+        import five_sim
+
+        countries = {}
+        services = {}
+        error = ""
+        selected_country = request.args.get("country", "nigeria").strip().lower()
+        query = request.args.get("q", "").strip().lower()
+
+        try:
+            countries = five_sim.get_countries()
+            if not isinstance(countries, dict):
+                countries = {}
+                error = "5SIM returned an unexpected country catalogue."
+
+            if not error and selected_country not in countries:
+                selected_country = "nigeria" if "nigeria" in countries else (
+                    next(iter(countries), "")
+                )
+
+            if not error and selected_country:
+                result = five_sim.get_products(selected_country, "any")
+                if isinstance(result, dict):
+                    services = {
+                        name: details for name, details in result.items()
+                        if isinstance(details, dict)
+                        and (not query or query in str(name).lower())
+                    }
+                else:
+                    error = "5SIM returned an unexpected services catalogue."
+
+        except five_sim.FiveSimError as exc:
+            error = str(exc)
+
+        return render_template(
+            "catalogue.html",
+            countries=countries,
+            services=services,
+            selected_country=selected_country,
+            query=query,
+            error=error,
+        )
+
     @app.post("/webhook/sms")
     def webhook_sms():
         """Africa's Talking inbound SMS callback (form fields: from, to, text, id, date)."""

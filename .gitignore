@@ -8,3 +8,7 @@ instance/
 *.db
 *.sqlite*
 *.zip
+# Local secrets and development backups
+.env.*
+*.backup
+*.before_*
