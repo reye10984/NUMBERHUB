@@ -17,6 +17,18 @@ CREATE TABLE IF NOT EXISTS numbers(id INTEGER PRIMARY KEY, user_id INTEGER NOT N
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, number_id INTEGER NOT NULL REFERENCES numbers(id),
   sender TEXT NOT NULL, body TEXT NOT NULL, is_demo INTEGER NOT NULL, provider_id TEXT, received_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_provider ON messages(provider_id) WHERE provider_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS five_sim_orders(
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  provider_order_id TEXT NOT NULL UNIQUE,
+  phone TEXT NOT NULL,
+  country TEXT NOT NULL,
+  product TEXT NOT NULL,
+  status TEXT NOT NULL,
+  sms_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS telegram_links(
   telegram_user_id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
@@ -310,6 +322,134 @@ def create_app(config=None):
             query=query,
             error=error,
         )
+
+
+    @app.post("/catalogue/buy")
+    @login_required
+    def five_sim_buy():
+        """Buy a 5SIM number only after an explicit, confirmed form submission."""
+        import five_sim
+
+        if os.environ.get("DEMO_MODE", "1") != "0":
+            flash("Demo mode is enabled; real 5SIM purchases are disabled.", "error")
+            return redirect(url_for("five_sim_catalogue"))
+
+        country = request.form.get("country", "").strip().lower()
+        product = request.form.get("product", "").strip()
+
+        if not country or not product:
+            flash("Choose a valid country and service.", "error")
+            return redirect(url_for("five_sim_catalogue"))
+
+        try:
+            profile = five_sim.get_profile()
+            try:
+                available_balance = float(profile.get("balance", 0) or 0)
+            except (TypeError, ValueError):
+                available_balance = 0
+
+            if available_balance <= 0:
+                flash(
+                    "Your 5SIM balance is zero or unavailable. Add funds to your 5SIM account before ordering.",
+                    "error",
+                )
+                return redirect(url_for("five_sim_catalogue"))
+
+            products = five_sim.get_products(country, "any")
+            details = products.get(product) if isinstance(products, dict) else None
+
+            if not isinstance(details, dict):
+                flash("That service is not listed for the selected country. Reload the catalogue.", "error")
+                return redirect(url_for("five_sim_catalogue") + "?country=" + country)
+
+            try:
+                quantity = int(details.get("Qty", 0) or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+
+            if quantity <= 0:
+                flash("5SIM reports no available numbers for that service.", "error")
+                return redirect(url_for("five_sim_catalogue") + "?country=" + country)
+
+            # This is the only route that initiates a real purchase.
+            result = five_sim.buy_activation(country, "any", product)
+
+            if not isinstance(result, dict) or result.get("id") is None or not result.get("phone"):
+                flash(
+                    "5SIM returned an unexpected order response. Check your 5SIM account before retrying.",
+                    "error",
+                )
+                return redirect(url_for("five_sim_orders"))
+
+            provider_order_id = str(result["id"])
+            phone = str(result["phone"])
+            status = str(result.get("status", "PENDING"))
+            sms_json = json.dumps(result.get("sms", []), ensure_ascii=False)
+
+            db().execute(
+                """INSERT INTO five_sim_orders
+                   (user_id, provider_order_id, phone, country, product, status,
+                    sms_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    g.user["id"], provider_order_id, phone, country, product,
+                    status, sms_json, now(), now(),
+                ),
+            )
+
+            flash("5SIM order created successfully.", "ok")
+            return redirect(url_for("five_sim_orders"))
+
+        except five_sim.FiveSimError as exc:
+            flash("5SIM order failed: " + str(exc), "error")
+            return redirect(url_for("five_sim_catalogue") + "?country=" + country)
+
+    @app.get("/5sim/orders")
+    @login_required
+    def five_sim_orders():
+        rows = db().execute(
+            "SELECT * FROM five_sim_orders WHERE user_id=? ORDER BY id DESC",
+            (g.user["id"],),
+        ).fetchall()
+        return render_template("five_sim_orders.html", rows=rows)
+
+    @app.post("/5sim/orders/<int:order_row_id>/refresh")
+    @login_required
+    def five_sim_refresh_order(order_row_id):
+        """Refresh only an order belonging to the currently logged-in user."""
+        import five_sim
+
+        d = db()
+        row = d.execute(
+            "SELECT * FROM five_sim_orders WHERE id=? AND user_id=?",
+            (order_row_id, g.user["id"]),
+        ).fetchone()
+
+        if not row:
+            abort(404)
+
+        try:
+            result = five_sim.check_order(row["provider_order_id"])
+            if not isinstance(result, dict):
+                flash("5SIM returned an unexpected order status.", "error")
+                return redirect(url_for("five_sim_orders"))
+
+            status = str(result.get("status", row["status"]))
+            phone = str(result.get("phone") or row["phone"])
+            sms_json = json.dumps(result.get("sms", []), ensure_ascii=False)
+
+            d.execute(
+                """UPDATE five_sim_orders
+                   SET status=?, phone=?, sms_json=?, updated_at=?
+                   WHERE id=? AND user_id=?""",
+                (status, phone, sms_json, now(), order_row_id, g.user["id"]),
+            )
+            flash("5SIM order status refreshed.", "ok")
+
+        except five_sim.FiveSimError as exc:
+            flash("Could not refresh 5SIM order: " + str(exc), "error")
+
+        return redirect(url_for("five_sim_orders"))
 
     @app.post("/webhook/sms")
     def webhook_sms():

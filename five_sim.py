@@ -94,3 +94,48 @@ def get_products(country, operator="any"):
     return api_request(
         f"/guest/products/{country}/{operator}"
     )
+
+
+def buy_activation(country, operator, product):
+    """Purchase one activation number. Calling this function spends 5SIM balance."""
+    country = urllib.parse.quote(str(country), safe="")
+    operator = urllib.parse.quote(str(operator), safe="")
+    product = urllib.parse.quote(str(product), safe="")
+
+    if not country or not operator or not product:
+        raise FiveSimError("Country, operator, and product are required.")
+
+    return api_request(
+        f"/user/buy/activation/{country}/{operator}/{product}",
+        authenticated=True,
+    )
+
+
+def check_order(order_id):
+    """Retrieve the current status and SMS messages for an activation order."""
+    try:
+        order_id = int(order_id)
+        if order_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise FiveSimError("Invalid 5SIM order ID.") from None
+
+    return api_request(
+        f"/user/check/{order_id}",
+        authenticated=True,
+    )
+
+
+def cancel_order(order_id):
+    """Cancel an activation order. This changes the real 5SIM order."""
+    try:
+        order_id = int(order_id)
+        if order_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise FiveSimError("Invalid 5SIM order ID.") from None
+
+    return api_request(
+        f"/user/cancel/{order_id}",
+        authenticated=True,
+    )

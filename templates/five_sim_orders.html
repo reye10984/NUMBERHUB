@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>My 5SIM Orders</h1>
+
+<div class="card">
+  <p><a href="{{ url_for('five_sim_catalogue') }}">Back to 5SIM catalogue</a></p>
+  <p>Refresh an order to retrieve its latest status and any SMS messages reported by 5SIM.</p>
+</div>
+
+{% for r in rows %}
+  <div class="card">
+    <h2>{{ r.product }} — {{ r.country|title }}</h2>
+    <p><strong>Number:</strong> {{ r.phone }}</p>
+    <p><strong>Status:</strong> {{ r.status }}</p>
+    <p><strong>Order ID:</strong> {{ r.provider_order_id }}</p>
+    <p><strong>Created:</strong> {{ r.created_at }} UTC</p>
+    <p><strong>Last checked:</strong> {{ r.updated_at }} UTC</p>
+
+    <form method="post"
+          action="{{ url_for('five_sim_refresh_order', order_row_id=r.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Refresh status and SMS</button>
+    </form>
+
+    <h3>SMS messages</h3>
+    {% if r.sms_json and r.sms_json != '[]' %}
+      <pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ r.sms_json }}</pre>
+    {% else %}
+      <p>No SMS messages returned yet.</p>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="card"><p>You have no 5SIM orders yet.</p></div>
+{% endfor %}
+{% endblock %}

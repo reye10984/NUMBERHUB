@@ -3,8 +3,9 @@
 <h1>5SIM Catalogue</h1>
 
 <div class="card">
-  <p>Browse the service listings returned by 5SIM. This page does not
-  purchase numbers or deduct wallet credits.</p>
+  <p>Browse 5SIM services and reported prices. Purchasing a number spends
+  funds from your 5SIM account, not your NumberHub demo wallet.</p>
+  <p><a href="{{ url_for('five_sim_orders') }}">View my 5SIM orders</a></p>
 
   {% if error %}
     <p class="err">{{ error }}</p>
@@ -29,12 +30,15 @@
 {% if services %}
   <div class="card">
     <h2>Services</h2>
-    <p>Prices and quantities are shown as returned by the 5SIM API.
-    Confirm currency, fees, and final availability with 5SIM before making decisions.</p>
+    <p>Prices, quantities, and currency are reported by 5SIM and may change.
+    Check the final price and availability before purchasing.</p>
     <div style="overflow-x:auto">
       <table>
         <thead>
-          <tr><th>Service</th><th>Category</th><th>Reported quantity</th><th>Reported price</th></tr>
+          <tr>
+            <th>Service</th><th>Category</th><th>Quantity</th>
+            <th>Reported price</th><th>Action</th>
+          </tr>
         </thead>
         <tbody>
           {% for name, details in services.items() %}
@@ -43,6 +47,19 @@
               <td>{{ details.get('Category', '—') }}</td>
               <td>{{ details.get('Qty', '—') }}</td>
               <td>{{ details.get('Price', '—') }}</td>
+              <td>
+                {% if details.get('Category') == 'activation' and (details.get('Qty', 0)|int > 0) %}
+                  <form method="post" action="{{ url_for('five_sim_buy') }}"
+                        onsubmit="return confirm('This will attempt to purchase a real number using your 5SIM balance. Continue?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="country" value="{{ selected_country }}">
+                    <input type="hidden" name="product" value="{{ name }}">
+                    <button type="submit">Buy number</button>
+                  </form>
+                {% else %}
+                  Not available to order
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
