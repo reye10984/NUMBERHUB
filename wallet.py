@@ -224,11 +224,16 @@ def complete_pending_payment(
             created_at,
         ))
 
-        connection.execute("""
+        cursor = connection.execute("""
             UPDATE wallet_pending_payments
             SET status = 'credited', updated_at = ?
             WHERE reference = ? AND status = 'pending'
         """, (created_at, reference))
+
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                "Pending payment status update affected an unexpected number of rows."
+            )
 
         connection.commit()
         return True

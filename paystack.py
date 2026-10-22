@@ -1,6 +1,7 @@
 """Server-side Paystack API helpers. Never trust browser payment claims."""
 import os
 import re
+from urllib.parse import urlparse
 
 import requests
 
@@ -55,8 +56,26 @@ def initialize_transaction(email, amount_kobo, reference, callback_url):
         raise ValueError("Amount must be a positive integer number of kobo.")
     if not isinstance(reference, str) or not REFERENCE_RE.fullmatch(reference):
         raise ValueError("Invalid payment reference.")
-    if not isinstance(callback_url, str) or not callback_url.startswith("https://"):
+    if not isinstance(callback_url, str):
         raise ValueError("A secure HTTPS callback URL is required.")
+
+    try:
+        callback = urlparse(callback_url)
+        callback_port = callback.port
+    except ValueError as exc:
+        raise ValueError("Invalid callback URL.") from exc
+
+    if (
+        callback.scheme != "https"
+        or not callback.hostname
+        or callback.username is not None
+        or callback.password is not None
+        or callback_port not in (None, 443)
+        or callback.query
+        or callback.fragment
+        or any(char.isspace() for char in callback_url)
+    ):
+        raise ValueError("A valid secure HTTPS callback URL is required.")
 
     data = _api_request(
         "POST",
@@ -71,9 +90,25 @@ def initialize_transaction(email, amount_kobo, reference, callback_url):
     )
     authorization_url = data.get("authorization_url")
     returned_reference = data.get("reference")
+    try:
+        parsed_url = (
+            urlparse(authorization_url)
+            if isinstance(authorization_url, str)
+            else None
+        )
+        checkout_port = parsed_url.port if parsed_url is not None else None
+    except ValueError as exc:
+        raise PaystackError(
+            "Paystack returned invalid transaction details."
+        ) from exc
+
     if (
-        not isinstance(authorization_url, str)
-        or not authorization_url.startswith("https://")
+        parsed_url is None
+        or parsed_url.scheme != "https"
+        or parsed_url.hostname != "checkout.paystack.com"
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or checkout_port not in (None, 443)
         or not isinstance(returned_reference, str)
         or returned_reference != reference
     ):

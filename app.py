@@ -5,7 +5,13 @@ from functools import wraps
 from flask import (Flask, abort, current_app, flash, g, jsonify, redirect,
                    render_template, request, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
-from wallet import ensure_wallet_schema, ensure_pending_payment_schema
+from wallet import (
+    ensure_wallet_schema, ensure_pending_payment_schema,
+    create_pending_payment, complete_pending_payment,
+)
+from paystack import (
+    initialize_transaction, verify_transaction, PaystackError,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL,
@@ -175,7 +181,132 @@ def create_app(config=None):
             "SELECT * FROM ledger WHERE user_id=? ORDER BY id DESC LIMIT 50",
             (uid,),
         ).fetchall()
-        return render_template("wallet.html", bal=balance(d, uid), ledger=rows)
+        pending = d.execute(
+            """SELECT reference, amount_kobo, status, created_at
+               FROM wallet_pending_payments
+               WHERE user_id=? ORDER BY id DESC LIMIT 10""",
+            (uid,),
+        ).fetchall()
+        return render_template(
+            "wallet.html", bal=balance(d, uid), ledger=rows, pending=pending
+        )
+
+    @app.post("/wallet/deposit")
+    @login_required
+    def wallet_deposit():
+        from decimal import Decimal, InvalidOperation
+
+        raw = request.form.get("amount", "").strip()
+        try:
+            value = Decimal(raw)
+            if not value.is_finite() or value <= 0 or value * 100 != (value * 100).to_integral_value():
+                raise ValueError
+            amount_kobo = int(value * 100)
+        except (InvalidOperation, ValueError):
+            flash("Enter a valid deposit amount with at most two decimal places.", "error")
+            return redirect(url_for("wallet_page"))
+
+        minimum = int(os.environ.get("WALLET_MIN_DEPOSIT_KOBO", "10000"))
+        maximum = int(os.environ.get("WALLET_MAX_DEPOSIT_KOBO", "50000000"))
+        if minimum <= 0 or maximum < minimum or not minimum <= amount_kobo <= maximum:
+            flash(
+                f"Deposit must be between ₦{minimum / 100:.2f} and ₦{maximum / 100:.2f}.",
+                "error",
+            )
+            return redirect(url_for("wallet_page"))
+
+        from urllib.parse import urlparse
+
+        base_url = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        try:
+            parsed_base_url = urlparse(base_url)
+            base_port = parsed_base_url.port
+        except ValueError:
+            parsed_base_url = None
+            base_port = None
+
+        if (
+            parsed_base_url is None
+            or parsed_base_url.scheme != "https"
+            or not parsed_base_url.hostname
+            or parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+            or base_port not in (None, 443)
+            or parsed_base_url.path not in ("", "/")
+            or parsed_base_url.query
+            or parsed_base_url.fragment
+            or any(char.isspace() for char in base_url)
+        ):
+            flash("Secure payment callback is not configured. Please try again later.", "error")
+            return redirect(url_for("wallet_page"))
+
+        reference = "nh_" + secrets.token_urlsafe(24).replace("-", "x").replace("_", "y")
+        timestamp = now()
+        currency = os.environ.get("PAYSTACK_CURRENCY", "NGN").strip().upper()
+
+        try:
+            create_pending_payment(
+                db(), int(g.user["id"]), reference, amount_kobo, currency, timestamp
+            )
+            result = initialize_transaction(
+                g.user["email"], amount_kobo, reference,
+                base_url + url_for("paystack_callback"),
+            )
+            return redirect(result["authorization_url"])
+        except (PaystackError, ValueError, sqlite3.Error):
+            current_app.logger.exception("Paystack deposit initialization failed")
+            flash("Could not start the payment. Your wallet has not been credited.", "error")
+            return redirect(url_for("wallet_page"))
+
+    @app.get("/payments/paystack/callback")
+    def paystack_callback():
+        reference = request.args.get("reference", "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", reference):
+            flash("Invalid payment reference.", "error")
+            return redirect(url_for("login"))
+
+        payment = db().execute(
+            """SELECT p.user_id, p.amount_kobo, p.currency, p.status, u.email
+               FROM wallet_pending_payments p
+               JOIN users u ON u.id=p.user_id
+               WHERE p.reference=?""",
+            (reference,),
+        ).fetchone()
+
+        if payment is None:
+            flash("Payment reference was not found.", "error")
+            return redirect(url_for("login"))
+
+        if payment["status"] == "credited":
+            flash("This payment has already been credited.", "ok")
+            if session.get("uid") == payment["user_id"]:
+                return redirect(url_for("wallet_page"))
+            return redirect(url_for("login"))
+
+        try:
+            verified = verify_transaction(
+                reference,
+                expected_amount_kobo=payment["amount_kobo"],
+                expected_email=payment["email"],
+            )
+            if verified.get("currency") != payment["currency"]:
+                raise PaystackError("Payment currency does not match the pending deposit.")
+
+            credited = complete_pending_payment(
+                db(), reference, payment["amount_kobo"],
+                payment["currency"], now(),
+            )
+            if credited:
+                flash("Payment verified and wallet credited successfully.", "ok")
+            else:
+                flash("Payment was already processed or could not be matched.", "error")
+        except (PaystackError, ValueError, sqlite3.Error):
+            current_app.logger.exception("Paystack callback verification failed")
+            flash("Payment could not be verified. Your wallet has not been credited.", "error")
+
+        if session.get("uid") == payment["user_id"]:
+            return redirect(url_for("wallet_page"))
+        return redirect(url_for("login"))
 
     @app.get("/request")
     @login_required

@@ -246,5 +246,60 @@ class WalletTests(unittest.TestCase):
         self.assertEqual(balance, 0)
 
 
+    def test_pending_status_update_failure_rolls_back_everything(self):
+        ensure_pending_payment_schema(self.connection)
+        reference = "pending-ref-rowcount-01"
+
+        create_pending_payment(
+            self.connection,
+            self.user_id,
+            reference,
+            100000,
+            "NGN",
+            "2026-01-01 00:00:00",
+        )
+
+        # Simulate a status update that succeeds syntactically but changes
+        # zero rows. The row-count guard must abort the whole transaction.
+        self.connection.execute("""
+            CREATE TRIGGER suppress_pending_status_update
+            BEFORE UPDATE OF status ON wallet_pending_payments
+            WHEN OLD.reference = NEW.reference
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END
+        """)
+
+        with self.assertRaisesRegex(
+            RuntimeError, "unexpected number of rows"
+        ):
+            complete_pending_payment(
+                self.connection,
+                reference,
+                100000,
+                "NGN",
+                "2026-01-01 00:01:00",
+            )
+
+        ref_count = self.connection.execute(
+            "SELECT COUNT(*) FROM wallet_payment_refs WHERE reference=?",
+            (reference,),
+        ).fetchone()[0]
+
+        ledger_count = self.connection.execute(
+            "SELECT COUNT(*) FROM ledger WHERE user_id=?",
+            (self.user_id,),
+        ).fetchone()[0]
+
+        status = self.connection.execute(
+            "SELECT status FROM wallet_pending_payments WHERE reference=?",
+            (reference,),
+        ).fetchone()[0]
+
+        self.assertEqual(ref_count, 0)
+        self.assertEqual(ledger_count, 0)
+        self.assertEqual(status, "pending")
+
+
 if __name__ == "__main__":
     unittest.main()
