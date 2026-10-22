@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Wallet</h1>
+<div class="card">
+  <p class="big">₦{{ "%.2f"|format(bal / 100) }}</p>
+  <p>Your balance is calculated on the server from your wallet ledger.</p>
+  <p><strong>Deposits are not enabled yet.</strong> Do not send money to a bank account or payment reference expecting an automatic wallet credit.</p>
+  <p>Wallet-funded 5SIM purchases are not enabled yet.</p>
+</div>
+<h2>Wallet history</h2>
+<div class="scroll">
+<table>
+  <tr><th>Date (UTC)</th><th>Type</th><th>Note</th><th>Amount (NGN)</th></tr>
+  {% for entry in ledger %}
+  <tr>
+    <td>{{ entry.created_at }}</td>
+    <td>{{ entry.kind }}</td>
+    <td>{{ entry.note }}</td>
+    <td>₦{{ "%.2f"|format(entry.amount_cents / 100) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No wallet transactions yet.</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

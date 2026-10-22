@@ -1,6 +1,1 @@
-{% extends "base.html" %}{% block body %}<h1>Request a number</h1>
-<div class="card"><p>Price: {{ price|money }} credits. Your balance: {{ bal|money }}.</p>
-{% if provider().mode == 'demo' %}<p>This creates a <b>DEMO</b> number. It is not a real phone number.</p>
-{% elif provider().mode == 'live' %}<p>Live mode assigns the Africa's Talking number configured on this server. It does not buy new numbers.</p>
-{% else %}<p class="err">{{ provider().message }}</p>{% endif %}
-<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button {% if provider().mode == 'unconfigured' %}disabled{% endif %}>Request number</button></form></div>{% endblock %}
+{% extends "base.html" %}{% block body %}<h1>Get a real number</h1><div class="card"><p>Choose a country and service from the 5SIM catalogue. The displayed availability and price come from 5SIM.</p><p>Purchasing spends your 5SIM account balance; no NumberHub demo wallet is used.</p><a class="button" href="{{ url_for('five_sim_catalogue') }}">Open 5SIM catalogue</a></div>{% endblock %}

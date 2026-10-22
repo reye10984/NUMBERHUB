@@ -5,14 +5,13 @@
 <body>
 <header><a class="brand" href="/">NumberHub</a>
 {% if g.user %}<nav>
-<a href="{{ url_for('dashboard') }}">Dashboard</a><a href="{{ url_for('request_page') }}">Request</a>
+<a href="{{ url_for('dashboard') }}">Dashboard</a><a href="{{ url_for('wallet_page') }}">Wallet</a><a href="{{ url_for('five_sim_catalogue') }}">Get Number</a>
 <a href="{{ url_for('history') }}">History</a><a href="{{ url_for('inbox') }}">Inbox</a>
-<a href="{{ url_for('provider_page') }}">Provider</a><a href="{{ url_for('five_sim_catalogue') }}">5SIM Catalogue</a>
+<a href="{{ url_for('provider_page') }}">5SIM Status</a><a href="{{ url_for('five_sim_catalogue') }}">5SIM Catalogue</a>
 <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link">Log out</button></form>
 </nav>{% endif %}</header>
 <main>
-{% if provider().mode == 'demo' %}<div class="banner demo">DEMO MODE: all numbers, credit and messages are simulated.</div>
-{% elif provider().mode == 'unconfigured' %}<div class="banner err">{{ provider().message }}</div>{% endif %}
+{% if provider().mode == 'unconfigured' %}<div class="banner err">{{ provider().message }}</div>{% endif %}
 {% for c, m in get_flashed_messages(with_categories=true) %}<div class="flash {{ c }}">{{ m }}</div>{% endfor %}
 {% block body %}{% endblock %}
 </main><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>
