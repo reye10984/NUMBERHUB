@@ -1,7 +1,54 @@
-{% extends "base.html" %}{% block body %}<h1>Dashboard</h1>
-<div class="card"><p class="big">{{ bal|money }} credits</p><p>Balance (calculated on the server from your ledger). Numbers: {{ count }}. Price per number: {{ price|money }}.</p>
-{% if provider().mode == 'demo' %}<form method="post" action="{{ url_for('demo_credit') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Add DEMO credit</button></form>{% endif %}</div>
-<h2>Wallet ledger</h2>
-<div class="scroll"><table><tr><th>Date (UTC)</th><th>Type</th><th>Note</th><th>Amount</th></tr>
-{% for l in ledger %}<tr><td>{{ l.created_at }}</td><td>{{ l.kind }}</td><td>{{ l.note }}</td><td>{{ l.amount_cents|money }}</td></tr>
-{% else %}<tr><td colspan="4">No entries yet.</td></tr>{% endfor %}</table></div>{% endblock %}
+{% extends "base.html" %}
+{% block body %}
+<section class="nh-hero">
+  <div class="nh-hero-copy">
+    <span class="nh-eyebrow">YOUR NUMBERHUB WORKSPACE</span>
+    <h1>Welcome back 👋</h1>
+    <p>Manage your wallet, explore virtual numbers and keep track of your activity.</p>
+    <div class="nh-actions">
+      <a class="nh-btn nh-btn-light" href="{{ url_for('five_sim_catalogue') }}">Browse numbers <span>→</span></a>
+      <a class="nh-btn nh-btn-ghost" href="{{ url_for('dashboard') }}">＋ Add funds</a>
+    </div>
+  </div>
+  <div class="nh-hero-art" aria-hidden="true">
+    <div class="nh-orbit">◎</div>
+    <div class="nh-phone"><span>NUMBERHUB</span><strong>Stay connected.</strong><div class="nh-phone-line"></div><div class="nh-phone-line short"></div><div class="nh-phone-dot">✓</div></div>
+  </div>
+</section>
+
+<section class="nh-stats">
+  <article class="nh-stat"><span class="nh-stat-icon wallet-icon">₦</span><span class="nh-stat-label">Wallet balance</span><strong>₦{{ bal|money }} credits</strong><small>Available account balance</small><a href="{{ url_for('dashboard') }}">Manage wallet →</a></article>
+  <article class="nh-stat"><span class="nh-stat-icon number-icon">▣</span><span class="nh-stat-label">Your numbers</span><strong>{{ count }}</strong><small>Numbers in your account</small><a href="{{ url_for('history') }}">View history →</a></article>
+  <article class="nh-stat"><span class="nh-stat-icon inbox-icon">✉</span><span class="nh-stat-label">SMS inbox</span><strong>Messages</strong><small>Check incoming messages</small><a href="{{ url_for('inbox') }}">Open inbox →</a></article>
+  <article class="nh-stat"><span class="nh-stat-icon provider-icon">◉</span><span class="nh-stat-label">Provider status</span><strong class="nh-status-text">{{ provider().mode|replace('_',' ')|title }}</strong><small>{{ provider().message }}</small><a href="{{ url_for('provider_page') }}">View status →</a></article>
+</section>
+
+<section class="nh-main-grid">
+  <article class="nh-panel nh-buy-panel">
+    <div class="nh-panel-heading"><div><span class="nh-eyebrow">GET STARTED</span><h2>Buy a virtual number</h2><p>Choose a service and country to browse available options.</p></div><span class="nh-panel-icon">＋</span></div>
+    <div class="nh-choice-row">
+      <div class="nh-choice"><span>01</span><div><strong>Choose a country</strong><small>Browse supported locations</small></div></div>
+      <div class="nh-choice"><span>02</span><div><strong>Select a service</strong><small>Find the service you need</small></div></div>
+    </div>
+    <a class="nh-btn nh-btn-primary nh-full" href="{{ url_for('five_sim_catalogue') }}">Explore 5SIM catalogue <span>→</span></a>
+    <p class="nh-note">Availability and pricing are provided by the connected provider. Review the final price before purchasing.</p>
+  </article>
+  <article class="nh-panel nh-quick-panel">
+    <div class="nh-panel-heading"><div><h2>Quick actions</h2><p>Your most-used tools in one place.</p></div></div>
+    <a class="nh-quick-link" href="{{ url_for('dashboard') }}"><span class="nh-quick-icon">＋</span><span><strong>Add funds</strong><small>Top up your NumberHub wallet</small></span><b>›</b></a>
+    <a class="nh-quick-link" href="{{ url_for('five_sim_catalogue') }}"><span class="nh-quick-icon">▣</span><span><strong>Get a number</strong><small>Browse countries and services</small></span><b>›</b></a>
+    <a class="nh-quick-link" href="{{ url_for('history') }}"><span class="nh-quick-icon">↗</span><span><strong>Transactions &amp; history</strong><small>Review account activity</small></span><b>›</b></a>
+    <a class="nh-quick-link" href="{{ url_for('inbox') }}"><span class="nh-quick-icon">✉</span><span><strong>SMS inbox</strong><small>View received messages</small></span><b>›</b></a>
+  </article>
+</section>
+
+<section class="nh-panel nh-activity">
+  <div class="nh-panel-heading"><div><h2>Recent wallet activity</h2><p>Your latest ledger entries, recorded by NumberHub.</p></div><a class="nh-text-link" href="{{ url_for('history') }}">View history →</a></div>
+  <div class="scroll"><table class="nh-table"><thead><tr><th>Activity</th><th>Details</th><th>Date (UTC)</th><th class="nh-amount">Amount</th></tr></thead><tbody>
+  {% for l in ledger[:6] %}
+  <tr><td><span class="nh-ledger-icon">{% if l.kind and ('deposit' in l.kind|lower or 'credit' in l.kind|lower) %}＋{% else %}↗{% endif %}</span><strong>{{ l.kind|replace('_',' ')|title }}</strong></td><td>{{ l.note or 'Wallet activity' }}</td><td>{{ l.created_at }}</td><td class="nh-amount {% if l.amount_cents > 0 %}nh-positive{% endif %}">{% if l.amount_cents > 0 %}+{% endif %}₦{{ l.amount_cents|abs|money }}</td></tr>
+  {% else %}<tr><td colspan="4" class="nh-empty">No wallet activity yet. Your transactions will appear here.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<div class="nh-security"><span>✓</span><div><strong>Your account, your control</strong><p>Keep your login details private. Use services in line with applicable laws and provider terms.</p></div></div>
+{% endblock %}
