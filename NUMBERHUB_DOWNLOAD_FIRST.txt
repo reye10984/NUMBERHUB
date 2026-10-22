@@ -1,4 +1,3 @@
-NumberHub - minimal Flask/SQLite app (stage 1). Unzip, then read README.md.
-Contents: app.py, templates/, static/, tests/, requirements.txt, Procfile, .env.example, .gitignore, README.md, HANDOFF.md.
-Excluded: real .env files, credentials, virtualenvs, __pycache__, databases.
-Quick start: pip install -r requirements.txt && python app.py  (DEMO mode, no credentials needed)
+NUMBERHUB — 5SIM ONLY
+
+This app does not provide simulated numbers, fake credits, or simulated SMS. Configure FIVE_SIM_API_KEY and Telegram bot environment variables before testing. Catalogue browsing is not a purchase; submitting Buy makes a real 5SIM purchase request and may spend account balance.

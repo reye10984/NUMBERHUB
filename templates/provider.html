@@ -1,7 +1,8 @@
-{% extends "base.html" %}{% block body %}<h1>Provider configuration</h1>
-<div class="card"><p>Mode: <b>{{ p.mode }}</b>. {{ p.message }}</p>
-<p>Configuration is read from environment variables on the server. Values are never shown here.</p>
-<table>{% for k, v in status.items() %}<tr><td>{{ k }}</td><td>{{ 'set' if v else 'not set' }}</td></tr>{% endfor %}</table>
-<p>Set <code>DEMO_MODE=0</code> to use live mode. In the Africa's Talking dashboard, point your SMS inbound callback to:</p>
-<p><code>{{ webhook }}</code></p>
-<p>Real number provisioning is not automated by this app; numbers are managed in your Africa's Talking account.</p></div>{% endblock %}
+{% extends "base.html" %}{% block body %}
+<h1>5SIM Configuration</h1>
+<div class="card">
+<p>NumberHub uses 5SIM for its number catalogue, activation orders, and SMS status checks.</p>
+<p>The API key must be configured in the hosting environment. Never publish or share it.</p>
+<p>SMS messages appear in an order only when 5SIM returns them.</p>
+</div>
+{% endblock %}

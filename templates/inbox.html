@@ -1,7 +1,6 @@
 {% extends "base.html" %}{% block body %}<h1>SMS inbox</h1>
+<p>SMS shown here must come from a real provider response. Open <a href="{{ url_for('five_sim_orders') }}">My 5SIM Orders</a> and refresh an order to check for messages.</p>
 <p><button id="refresh" type="button">Refresh</button> <span id="status"></span></p>
 <ul id="msgs" class="msgs">
-{% for m in msgs %}<li>{% if m.is_demo %}<span class="tag">DEMO</span> {% endif %}<b>{{ m.sender }}</b> to {{ m.number }} <small>{{ m.received_at }}</small><div>{{ m.body }}</div></li>
-{% else %}<li class="empty">No messages yet.</li>{% endfor %}</ul>
-{% if provider().mode == 'demo' and demo_numbers %}<form method="post" action="{{ url_for('simulate') }}" class="card"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<label>Simulate a DEMO message for<select name="number_id">{% for n in demo_numbers %}<option value="{{ n.id }}">{{ n.number }}</option>{% endfor %}</select></label><button>Add DEMO message</button></form>{% endif %}{% endblock %}
+{% for m in msgs %}<li><b>{{ m.sender }}</b> to {{ m.number }} <small>{{ m.received_at }}</small><div>{{ m.body }}</div></li>
+{% else %}<li class="empty">No real SMS messages recorded yet. Refresh a 5SIM order to check for messages.</li>{% endfor %}</ul>{% endblock %}

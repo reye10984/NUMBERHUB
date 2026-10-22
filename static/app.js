@@ -11,7 +11,6 @@
         if (!rows.length) { var e = document.createElement("li"); e.className = "empty"; e.textContent = "No messages yet."; list.appendChild(e); }
         rows.forEach(function (m) {
           var li = document.createElement("li");
-          if (m.is_demo) { var t = document.createElement("span"); t.className = "tag"; t.textContent = "DEMO"; li.appendChild(t); li.appendChild(document.createTextNode(" ")); }
           var b = document.createElement("b"); b.textContent = m.sender; li.appendChild(b);
           li.appendChild(document.createTextNode(" to " + m.number + " "));
           var s = document.createElement("small"); s.textContent = m.received_at; li.appendChild(s);
