@@ -12,3 +12,8 @@ instance/
 .env.*
 *.backup
 *.before_*
+
+# Python and test caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

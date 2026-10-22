@@ -1,4 +1,5 @@
 {% extends "base.html" %}{% block body %}<h1>Number request history</h1>
-<div class="scroll"><table><tr><th>Number</th><th>Type</th><th>Status</th><th>Requested (UTC)</th></tr>
-{% for r in rows %}<tr><td>{{ r.number }}</td><td>{% if r.is_demo %}<span class="tag">DEMO</span>{% else %}Live{% endif %}</td><td>{{ r.status }}</td><td>{{ r.created_at }}</td></tr>
-{% else %}<tr><td colspan="4">No requests yet.</td></tr>{% endfor %}</table></div>{% endblock %}
+<p>New numbers are purchased through 5SIM. This page may contain older records.</p>
+<div class="scroll"><table><tr><th>Number</th><th>Status</th><th>Requested (UTC)</th></tr>
+{% for r in rows if not r.is_demo %}<tr><td>{{ r.number }}</td><td>{{ r.status }}</td><td>{{ r.created_at }}</td></tr>
+{% else %}<tr><td colspan="3">No real number requests are recorded here. View your 5SIM orders.</td></tr>{% endfor %}</table></div>{% endblock %}

@@ -4,7 +4,7 @@
 
 <div class="card">
   <p>Browse 5SIM services and reported prices. Purchasing a number spends
-  funds from your 5SIM account, not your NumberHub demo wallet.</p>
+  funds from your 5SIM account. No NumberHub wallet is used.</p>
   <p><a href="{{ url_for('five_sim_orders') }}">View my 5SIM orders</a></p>
 
   {% if error %}
@@ -50,7 +50,7 @@
               <td>
                 {% if details.get('Category') == 'activation' and (details.get('Qty', 0)|int > 0) %}
                   <form method="post" action="{{ url_for('five_sim_buy') }}"
-                        onsubmit="return confirm('This will attempt to purchase a real number using your 5SIM balance. Continue?');">
+                        onsubmit="return confirm('This submits a real purchase request to 5SIM and may spend your 5SIM balance. Continue only if you intend to purchase?');">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="country" value="{{ selected_country }}">
                     <input type="hidden" name="product" value="{{ name }}">

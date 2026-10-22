@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Wallet</h1>
+<div class="card">
+  <p class="big">₦{{ "%.2f"|format(bal / 100) }}</p>
+  <p>Your balance is calculated on the server from your wallet ledger.</p>
+  <h2>Add funds</h2>
+  <p>Payments are verified with Paystack before your wallet is credited.</p>
+  <form method="post" action="{{ url_for('wallet_deposit') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="amount">Amount in NGN</label>
+    <input id="amount" name="amount" type="number" min="100" max="500000" step="0.01" required>
+    <button type="submit">Continue to Paystack</button>
+  </form>
+  <p>Wallet-funded 5SIM purchases are not enabled yet.</p>
+</div>
+
+<h2>Recent deposits</h2>
+<div class="scroll">
+<table>
+  <tr><th>Reference</th><th>Amount (NGN)</th><th>Status</th><th>Created (UTC)</th></tr>
+  {% for item in pending %}
+  <tr>
+    <td>{{ item.reference }}</td>
+    <td>₦{{ "%.2f"|format(item.amount_kobo / 100) }}</td>
+    <td>{{ item.status }}</td>
+    <td>{{ item.created_at }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No deposits yet.</td></tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Wallet history</h2>
+<div class="scroll">
+<table>
+  <tr><th>Date (UTC)</th><th>Type</th><th>Note</th><th>Amount (NGN)</th></tr>
+  {% for entry in ledger %}
+  <tr>
+    <td>{{ entry.created_at }}</td>
+    <td>{{ entry.kind }}</td>
+    <td>{{ entry.note }}</td>
+    <td>₦{{ "%.2f"|format(entry.amount_cents / 100) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No wallet transactions yet.</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}
