@@ -7,7 +7,7 @@
     <p>Manage your wallet, explore virtual numbers and keep track of your activity.</p>
     <div class="nh-actions">
       <a class="nh-btn nh-btn-light" href="{{ url_for('five_sim_catalogue') }}">Browse numbers <span>→</span></a>
-      <a class="nh-btn nh-btn-ghost" href="{{ url_for('dashboard') }}">＋ Add funds</a>
+      <a class="nh-btn nh-btn-ghost" href="{{ url_for('wallet_page') }}">＋ Add funds</a>
     </div>
   </div>
   <div class="nh-hero-art" aria-hidden="true">
@@ -17,7 +17,7 @@
 </section>
 
 <section class="nh-stats">
-  <article class="nh-stat"><span class="nh-stat-icon wallet-icon">₦</span><span class="nh-stat-label">Wallet balance</span><strong>₦{{ bal|money }} credits</strong><small>Available account balance</small><a href="{{ url_for('dashboard') }}">Manage wallet →</a></article>
+  <article class="nh-stat"><span class="nh-stat-icon wallet-icon">₦</span><span class="nh-stat-label">Wallet balance</span><strong>₦{{ bal|money }} credits</strong><small>Available account balance</small><a href="{{ url_for('wallet_page') }}">Manage wallet →</a></article>
   <article class="nh-stat"><span class="nh-stat-icon number-icon">▣</span><span class="nh-stat-label">Your numbers</span><strong>{{ count }}</strong><small>Numbers in your account</small><a href="{{ url_for('history') }}">View history →</a></article>
   <article class="nh-stat"><span class="nh-stat-icon inbox-icon">✉</span><span class="nh-stat-label">SMS inbox</span><strong>Messages</strong><small>Check incoming messages</small><a href="{{ url_for('inbox') }}">Open inbox →</a></article>
   <article class="nh-stat"><span class="nh-stat-icon provider-icon">◉</span><span class="nh-stat-label">Provider status</span><strong class="nh-status-text">{{ provider().mode|replace('_',' ')|title }}</strong><small>{{ provider().message }}</small><a href="{{ url_for('provider_page') }}">View status →</a></article>
@@ -35,11 +35,53 @@
   </article>
   <article class="nh-panel nh-quick-panel">
     <div class="nh-panel-heading"><div><h2>Quick actions</h2><p>Your most-used tools in one place.</p></div></div>
-    <a class="nh-quick-link" href="{{ url_for('dashboard') }}"><span class="nh-quick-icon">＋</span><span><strong>Add funds</strong><small>Top up your NumberHub wallet</small></span><b>›</b></a>
+    <a class="nh-quick-link" href="{{ url_for('wallet_page') }}"><span class="nh-quick-icon">＋</span><span><strong>Add funds</strong><small>Top up your NumberHub wallet</small></span><b>›</b></a>
     <a class="nh-quick-link" href="{{ url_for('five_sim_catalogue') }}"><span class="nh-quick-icon">▣</span><span><strong>Get a number</strong><small>Browse countries and services</small></span><b>›</b></a>
     <a class="nh-quick-link" href="{{ url_for('history') }}"><span class="nh-quick-icon">↗</span><span><strong>Transactions &amp; history</strong><small>Review account activity</small></span><b>›</b></a>
     <a class="nh-quick-link" href="{{ url_for('inbox') }}"><span class="nh-quick-icon">✉</span><span><strong>SMS inbox</strong><small>View received messages</small></span><b>›</b></a>
   </article>
+</section>
+
+<section class="nh-panel" style="margin-top:20px;">
+  <div class="nh-panel-heading">
+    <div>
+      <h2>Recent 5SIM Orders</h2>
+      <p>Track your latest virtual number purchases.</p>
+    </div>
+    <a class="nh-text-link" href="{{ url_for('five_sim_orders') }}">View all orders →</a>
+  </div>
+  <div class="scroll">
+    <table class="nh-table">
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th>Country</th>
+          <th>Number</th>
+          <th>Status</th>
+          <th class="nh-amount">Charged</th>
+          <th>Date (UTC)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for order in recent_orders %}
+        <tr>
+          <td><strong>{{ order.product }}</strong></td>
+          <td>{{ order.country|title }}</td>
+          <td>{{ order.phone }}</td>
+          <td>{{ order.status|replace('_', ' ')|title }}</td>
+          <td class="nh-amount">₦{{ (order.customer_charge_kobo / 100)|money }}</td>
+          <td>{{ order.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="nh-empty">
+            No 5SIM orders yet. Your purchases will appear here.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <section class="nh-panel nh-activity">
@@ -64,5 +106,58 @@
     </div>
   </div>
 </section>
+
+
+<section class="nh-panel" style="margin-top:20px;">
+  <div class="nh-panel-heading">
+    <div>
+      <span class="nh-eyebrow">INVITE FRIENDS</span>
+      <h2>Your referral link</h2>
+      <p>Share your personal NumberHub link. See how many people register through it.</p>
+    </div>
+    <span class="nh-panel-icon">↗</span>
+  </div>
+  <div class="nh-choice-row">
+    <div class="nh-choice">
+      <span>✓</span>
+      <div><strong>{{ referral_count }} successful registration{% if referral_count != 1 %}s{% endif %}</strong><small>People who registered using your link</small></div>
+    </div>
+  </div>
+  <label for="nh-referral-link">Your personal link</label>
+  <input id="nh-referral-link" type="text" value="{{ referral_link }}" readonly
+         style="width:100%;box-sizing:border-box;margin:8px 0 12px;padding:12px;border-radius:10px;">
+  <div class="nh-actions">
+    <button class="nh-btn nh-btn-primary" type="button" id="nh-copy-referral">Copy referral link</button>
+    <a class="nh-btn nh-btn-light"
+       href="https://wa.me/?text={{ ('Join me on NumberHub: ' ~ referral_link)|urlencode }}"
+       target="_blank" rel="noopener noreferrer">Share on WhatsApp</a>
+  </div>
+  <p class="nh-note" id="nh-referral-copy-status" role="status" aria-live="polite"></p>
+</section>
+<script>
+(function () {
+  const input = document.getElementById('nh-referral-link');
+  const button = document.getElementById('nh-copy-referral');
+  const status = document.getElementById('nh-referral-copy-status');
+  if (!input || !button || !status) return;
+
+  button.addEventListener('click', async function () {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(input.value);
+      } else {
+        input.focus();
+        input.select();
+        if (!document.execCommand('copy')) throw new Error('Copy unavailable');
+      }
+      status.textContent = 'Referral link copied. You can share it with friends.';
+    } catch (error) {
+      input.focus();
+      input.select();
+      status.textContent = 'Select the link above and copy it manually.';
+    }
+  });
+})();
+</script>
 
 {% endblock %}

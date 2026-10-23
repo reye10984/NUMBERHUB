@@ -17,7 +17,8 @@ from paystack import (
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+  password_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+  referral_code TEXT UNIQUE, referred_by INTEGER REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
   amount_cents INTEGER NOT NULL, kind TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS numbers(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
@@ -116,6 +117,57 @@ def create_app(config=None):
     try:
         boot.execute("PRAGMA foreign_keys=ON")
         boot.executescript(SCHEMA)
+
+        # Add referral columns to existing databases without removing user data.
+        if database_url:
+            user_columns = {
+                row[0]
+                for row in boot.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = ?",
+                    ("users",),
+                )
+            }
+        else:
+            user_columns = {
+                row[1]
+                for row in boot.execute("PRAGMA table_info(users)")
+            }
+
+        if "referral_code" not in user_columns:
+            boot.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
+        if "referred_by" not in user_columns:
+            boot.execute(
+                "ALTER TABLE users ADD COLUMN referred_by INTEGER REFERENCES users(id)"
+            )
+
+        # Give every existing account a unique referral code.
+        existing_codes = {
+            row[0]
+            for row in boot.execute(
+                "SELECT referral_code FROM users WHERE referral_code IS NOT NULL"
+            )
+        }
+        for user_row in boot.execute(
+            "SELECT id FROM users WHERE referral_code IS NULL"
+        ).fetchall():
+            while True:
+                code = secrets.token_urlsafe(9)
+                if code not in existing_codes:
+                    break
+            boot.execute(
+                "UPDATE users SET referral_code=? WHERE id=?",
+                (code, user_row[0]),
+            )
+            existing_codes.add(code)
+
+        # Enforce uniqueness for referral codes on existing databases.
+        boot.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code "
+            "ON users(referral_code)"
+        )
+
         if database_url:
             columns = {
                 row[0]
@@ -193,6 +245,11 @@ def create_app(config=None):
 
     @app.route("/register", methods=["GET", "POST"])
     def register():
+        referral_code = (
+            request.form.get("ref", "") if request.method == "POST"
+            else request.args.get("ref", "")
+        ).strip()
+
         if request.method == "POST":
             email = request.form.get("email", "").strip().lower()
             pw = request.form.get("password", "")
@@ -201,15 +258,46 @@ def create_app(config=None):
             elif len(pw) < 8:
                 flash("Password must be at least 8 characters.", "error")
             else:
+                d = db()
+                referrer = None
+                if referral_code:
+                    referrer_row = d.execute(
+                        "SELECT id FROM users WHERE referral_code=?",
+                        (referral_code,),
+                    ).fetchone()
+                    if referrer_row:
+                        referrer = referrer_row["id"]
+
+                # Generate a unique referral code for the new account.
+                while True:
+                    new_referral_code = secrets.token_urlsafe(9)
+                    collision = d.execute(
+                        "SELECT id FROM users WHERE referral_code=?",
+                        (new_referral_code,),
+                    ).fetchone()
+                    if not collision:
+                        break
+
                 try:
-                    db().execute("INSERT INTO users(email,password_hash,created_at) VALUES(?,?,?)",
-                                 (email, generate_password_hash(pw), now()))
+                    d.execute(
+                        """INSERT INTO users
+                           (email, password_hash, created_at, referral_code, referred_by)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (
+                            email,
+                            generate_password_hash(pw),
+                            now(),
+                            new_referral_code,
+                            referrer,
+                        ),
+                    )
                 except sqlite3.IntegrityError:
                     flash("That email is already registered.", "error")
                 else:
                     flash("Account created. Please log in.", "ok")
                     return redirect(url_for("login"))
-        return render_template("register.html")
+
+        return render_template("register.html", ref=referral_code)
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -234,8 +322,60 @@ def create_app(config=None):
         d = db()
         led = d.execute("SELECT * FROM ledger WHERE user_id=? ORDER BY id DESC LIMIT 20", (g.user["id"],)).fetchall()
         n = d.execute("SELECT COUNT(*) FROM numbers WHERE user_id=?", (g.user["id"],)).fetchone()[0]
-        return render_template("dashboard.html", bal=balance(d, g.user["id"]), ledger=led, count=n,
-                               price=app.config["NUMBER_PRICE_CENTS"])
+        recent_orders = d.execute(
+            """SELECT id, product, country, phone, status,
+                      customer_charge_kobo, created_at
+               FROM five_sim_orders
+               WHERE user_id=?
+               ORDER BY id DESC
+               LIMIT 5""",
+            (g.user["id"],),
+        ).fetchall()
+
+        referral_row = d.execute(
+            "SELECT referral_code FROM users WHERE id=?",
+            (g.user["id"],),
+        ).fetchone()
+        referral_code = referral_row["referral_code"] if referral_row else None
+
+        # Repair an account with a missing code without changing its other data.
+        if not referral_code:
+            while True:
+                referral_code = secrets.token_urlsafe(9)
+                collision = d.execute(
+                    "SELECT id FROM users WHERE referral_code=?",
+                    (referral_code,),
+                ).fetchone()
+                if not collision:
+                    break
+            d.execute(
+                "UPDATE users SET referral_code=? WHERE id=?",
+                (referral_code, g.user["id"]),
+            )
+
+        referral_count = d.execute(
+            "SELECT COUNT(*) FROM users WHERE referred_by=?",
+            (g.user["id"],),
+        ).fetchone()[0]
+
+        base_url = (
+            os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+            or "https://numberhub-ixo3.onrender.com"
+        )
+        referral_link = (
+            f"{base_url}{url_for('register')}?ref={referral_code}"
+        )
+
+        return render_template(
+            "dashboard.html",
+            bal=balance(d, g.user["id"]),
+            ledger=led,
+            count=n,
+            recent_orders=recent_orders,
+            price=app.config["NUMBER_PRICE_CENTS"],
+            referral_link=referral_link,
+            referral_count=referral_count,
+        )
 
     @app.get("/wallet")
     @login_required
