@@ -5,6 +5,7 @@ from functools import wraps
 from flask import (Flask, abort, current_app, flash, g, jsonify, redirect,
                    render_template, request, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
+from db_backend import connect_database
 from wallet import (
     ensure_wallet_schema, ensure_pending_payment_schema,
     create_pending_payment, complete_pending_payment,
@@ -56,9 +57,10 @@ def provider():
 
 def db():
     if "db" not in g:
-        g.db = sqlite3.connect(current_app.config["DATABASE"], isolation_level=None)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys=ON")
+        g.db = connect_database(
+            current_app.config.get("DATABASE_URL"),
+            current_app.config["DATABASE"],
+        )
     return g.db
 
 
@@ -71,12 +73,24 @@ def create_app(config=None):
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
         DATABASE=os.environ.get("DATABASE_PATH", os.path.join(app.instance_path, "numberhub.db")),
+        DATABASE_URL=os.environ.get("DATABASE_URL", "").strip(),
         NUMBER_PRICE_CENTS=int(os.environ.get("NUMBER_PRICE_CENTS", "100")),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
     if config:
         app.config.update(config)
-    os.makedirs(os.path.dirname(os.path.abspath(app.config["DATABASE"])), exist_ok=True)
-    boot = sqlite3.connect(app.config["DATABASE"])
+        # Test configurations specifying DATABASE explicitly continue to use SQLite
+        # unless they also explicitly provide DATABASE_URL.
+        if "DATABASE" in config and "DATABASE_URL" not in config:
+            app.config["DATABASE_URL"] = None
+
+    database_url = app.config.get("DATABASE_URL")
+    if not database_url:
+        os.makedirs(
+            os.path.dirname(os.path.abspath(app.config["DATABASE"])),
+            exist_ok=True,
+        )
+
+    boot = connect_database(database_url, app.config["DATABASE"])
     try:
         boot.execute("PRAGMA foreign_keys=ON")
         boot.executescript(SCHEMA)
@@ -119,8 +133,18 @@ def create_app(config=None):
 
     @app.get("/health")
     def health():
+        database_backend = (
+            "postgresql"
+            if app.config.get("DATABASE_URL")
+            else "sqlite"
+        )
         db().execute("SELECT 1")
-        return jsonify(status="ok", mode=provider()["mode"])
+        return jsonify(
+            status="ok",
+            mode=provider()["mode"],
+            database=database_backend,
+            database_connected=True,
+        )
 
     @app.get("/")
     def index():
