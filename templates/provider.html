@@ -2,7 +2,15 @@
 <h1>5SIM Configuration</h1>
 <div class="card">
 <p>NumberHub uses 5SIM for its number catalogue, activation orders, and SMS status checks.</p>
-<p>The API key must be configured in the hosting environment. Never publish or share it.</p>
+
+{% if status.get("FIVE_SIM_API_KEY") %}
+<p><strong>API key configuration:</strong> Configured</p>
+<p>The hosting environment contains a 5SIM API key. This does not guarantee that every purchase or SMS request will succeed.</p>
+{% else %}
+<p><strong>API key configuration:</strong> Missing</p>
+<p>Set FIVE_SIM_API_KEY in your hosting environment, then redeploy.</p>
+{% endif %}
+
 <p>SMS messages appear in an order only when 5SIM returns them.</p>
 </div>
 {% endblock %}
