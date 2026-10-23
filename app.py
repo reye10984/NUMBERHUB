@@ -116,7 +116,23 @@ def create_app(config=None):
     try:
         boot.execute("PRAGMA foreign_keys=ON")
         boot.executescript(SCHEMA)
-        columns = {row[1] for row in boot.execute("PRAGMA table_info(five_sim_orders)")}
+        if database_url:
+            columns = {
+                row[0]
+                for row in boot.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = ?",
+                    ("five_sim_orders",),
+                )
+            }
+        else:
+            columns = {
+                row[1]
+                for row in boot.execute(
+                    "PRAGMA table_info(five_sim_orders)"
+                )
+            }
         if "customer_charge_kobo" not in columns:
             boot.execute("ALTER TABLE five_sim_orders ADD COLUMN customer_charge_kobo INTEGER NOT NULL DEFAULT 0")
         ensure_wallet_schema(boot)
