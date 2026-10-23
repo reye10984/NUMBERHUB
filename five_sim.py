@@ -1,4 +1,4 @@
-"""Safe 5SIM API client. This module does not purchase numbers."""
+"""5SIM API client for catalogue, purchase, and order status operations."""
 
 import json
 import os
@@ -11,7 +11,10 @@ API_BASE = "https://5sim.net/v1"
 
 
 class FiveSimError(Exception):
-    """A safe, user-facing 5SIM API error."""
+    """Provider error with a flag for definitive HTTP rejections."""
+    def __init__(self, message, definitive=False):
+        super().__init__(message)
+        self.definitive = definitive
 
 
 def api_request(path, authenticated=False):
@@ -58,7 +61,7 @@ def api_request(path, authenticated=False):
                 "5SIM rate limit reached. Try again later."
             ) from None
         raise FiveSimError(
-            f"5SIM returned HTTP status {exc.code}."
+            f"5SIM returned HTTP status {exc.code}.", definitive=(400 <= exc.code < 500)
         ) from None
 
     except (urllib.error.URLError, TimeoutError, OSError):

@@ -1,5 +1,6 @@
 """NumberHub: real 5SIM catalogue/orders with Telegram account linking and SMS forwarding."""
 import hmac, json, os, re, secrets, sqlite3, time, urllib.request
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timezone
 from functools import wraps
 from flask import (Flask, abort, current_app, flash, g, jsonify, redirect,
@@ -34,7 +35,15 @@ CREATE TABLE IF NOT EXISTS five_sim_orders(
   status TEXT NOT NULL,
   sms_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  customer_charge_kobo INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS five_sim_purchase_attempts(
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+  token TEXT NOT NULL UNIQUE, country TEXT NOT NULL, product TEXT NOT NULL,
+  charge_kobo INTEGER NOT NULL, status TEXT NOT NULL, provider_order_id TEXT,
+  error TEXT, refund_applied INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 """
 PROVIDER_VARS = ["FIVE_SIM_API_KEY"]
@@ -43,6 +52,19 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def customer_price_kobo(provider_price):
+    """Convert 5SIM USD price to NGN kobo with a 30% markup and safe rounding."""
+    try:
+        price = Decimal(str(provider_price))
+        rate = Decimal(os.environ.get("USD_TO_NGN_RATE", "1500"))
+        markup = Decimal(os.environ.get("FIVE_SIM_MARKUP_PERCENT", "30"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError("Invalid price configuration") from None
+    if not price.is_finite() or price <= 0 or not rate.is_finite() or rate <= 0 or not markup.is_finite() or markup < 0:
+        raise ValueError("Invalid price")
+    return int((price * rate * (Decimal(1) + markup / Decimal(100)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def provider():
@@ -94,6 +116,9 @@ def create_app(config=None):
     try:
         boot.execute("PRAGMA foreign_keys=ON")
         boot.executescript(SCHEMA)
+        columns = {row[1] for row in boot.execute("PRAGMA table_info(five_sim_orders)")}
+        if "customer_charge_kobo" not in columns:
+            boot.execute("ALTER TABLE five_sim_orders ADD COLUMN customer_charge_kobo INTEGER NOT NULL DEFAULT 0")
         ensure_wallet_schema(boot)
         ensure_pending_payment_schema(boot)
         boot.commit()
@@ -406,91 +431,120 @@ def create_app(config=None):
         except five_sim.FiveSimError as exc:
             error = str(exc)
 
+        customer_prices = {}
+        for name, details in services.items():
+            try:
+                customer_prices[name] = customer_price_kobo(details.get("Price"))
+            except (ValueError, InvalidOperation):
+                customer_prices[name] = None
         return render_template(
-            "catalogue.html",
-            countries=countries,
-            services=services,
-            selected_country=selected_country,
-            query=query,
-            error=error,
+            "catalogue.html", countries=countries, services=services,
+            selected_country=selected_country, query=query, error=error,
+            customer_prices=customer_prices, purchase_token=secrets.token_urlsafe(24),
         )
 
 
     @app.post("/catalogue/buy")
     @login_required
     def five_sim_buy():
-        """Buy a 5SIM number only after an explicit, confirmed form submission."""
+        """Charge the NumberHub wallet before calling 5SIM; never trust client prices."""
         import five_sim
-
         country = request.form.get("country", "").strip().lower()
         product = request.form.get("product", "").strip()
-
-        if not country or not product:
-            flash("Choose a valid country and service.", "error")
+        token = request.form.get("purchase_token", "").strip()
+        if not country or not product or not token or len(token) > 200:
+            flash("Purchase form expired or invalid. Reload the catalogue.", "error")
             return redirect(url_for("five_sim_catalogue"))
-
+        d = db(); uid = g.user["id"]
+        prior = d.execute("SELECT status FROM five_sim_purchase_attempts WHERE token=? AND user_id=?", (token, uid)).fetchone()
+        if prior:
+            flash("This purchase submission was already processed. Check your orders and wallet history.", "error")
+            return redirect(url_for("five_sim_orders"))
         try:
-            profile = five_sim.get_profile()
-            try:
-                available_balance = float(profile.get("balance", 0) or 0)
-            except (TypeError, ValueError):
-                available_balance = 0
-
-            if available_balance <= 0:
-                flash(
-                    "Your 5SIM balance is zero or unavailable. Add funds to your 5SIM account before ordering.",
-                    "error",
-                )
-                return redirect(url_for("five_sim_catalogue"))
-
             products = five_sim.get_products(country, "any")
             details = products.get(product) if isinstance(products, dict) else None
-
-            if not isinstance(details, dict):
-                flash("That service is not listed for the selected country. Reload the catalogue.", "error")
+            if not isinstance(details, dict) or str(details.get("Category", "")).lower() != "activation":
+                flash("That service is not available for the selected country.", "error")
                 return redirect(url_for("five_sim_catalogue") + "?country=" + country)
-
             try:
-                quantity = int(details.get("Qty", 0) or 0)
+                qty = int(details.get("Qty", 0) or 0)
             except (TypeError, ValueError):
-                quantity = 0
-
-            if quantity <= 0:
+                qty = 0
+            if qty <= 0:
                 flash("5SIM reports no available numbers for that service.", "error")
                 return redirect(url_for("five_sim_catalogue") + "?country=" + country)
-
-            # This is the only route that initiates a real purchase.
-            result = five_sim.buy_activation(country, "any", product)
-
-            if not isinstance(result, dict) or result.get("id") is None or not result.get("phone"):
-                flash(
-                    "5SIM returned an unexpected order response. Check your 5SIM account before retrying.",
-                    "error",
-                )
-                return redirect(url_for("five_sim_orders"))
-
-            provider_order_id = str(result["id"])
-            phone = str(result["phone"])
-            status = str(result.get("status", "PENDING"))
-            sms_json = json.dumps(result.get("sms", []), ensure_ascii=False)
-
-            db().execute(
-                """INSERT INTO five_sim_orders
-                   (user_id, provider_order_id, phone, country, product, status,
-                    sms_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    g.user["id"], provider_order_id, phone, country, product,
-                    status, sms_json, now(), now(),
-                ),
-            )
-
-            flash("5SIM order created successfully.", "ok")
-            return redirect(url_for("five_sim_orders"))
-
-        except five_sim.FiveSimError as exc:
-            flash("5SIM order failed: " + str(exc), "error")
+            charge = customer_price_kobo(details.get("Price"))
+            profile = five_sim.get_profile()
+            provider_balance = Decimal(str(profile.get("balance", "0")))
+            provider_price = Decimal(str(details.get("Price")))
+            if not provider_balance.is_finite() or provider_balance < provider_price:
+                flash("The 5SIM provider account does not have enough balance to fulfil this order.", "error")
+                return redirect(url_for("five_sim_catalogue") + "?country=" + country)
+        except (five_sim.FiveSimError, ValueError, InvalidOperation, TypeError, AttributeError) as exc:
+            flash("Could not validate this purchase with 5SIM. No wallet funds were taken.", "error")
             return redirect(url_for("five_sim_catalogue") + "?country=" + country)
+
+        # Reserve the customer's funds and idempotency token before the external call.
+        try:
+            d.execute("BEGIN IMMEDIATE")
+            existing = d.execute("SELECT id FROM five_sim_purchase_attempts WHERE token=?", (token,)).fetchone()
+            if existing:
+                d.execute("ROLLBACK")
+                flash("This purchase submission was already processed.", "error")
+                return redirect(url_for("five_sim_orders"))
+            current_balance = balance(d, uid)
+            if current_balance < charge:
+                d.execute("ROLLBACK")
+                flash(f"Insufficient wallet balance. This order costs ₦{charge / 100:.2f}.", "error")
+                return redirect(url_for("wallet_page"))
+            stamp = now()
+            d.execute("INSERT INTO five_sim_purchase_attempts(user_id,token,country,product,charge_kobo,status,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?)", (uid, token, country, product, charge, stamp, stamp))
+            d.execute("INSERT INTO ledger(user_id,amount_cents,kind,note,created_at) VALUES(?,?,?,?,?)", (uid, -charge, "number_purchase", f"5SIM {product} ({country}) purchase", stamp))
+            d.execute("COMMIT")
+        except sqlite3.IntegrityError:
+            if d.in_transaction: d.execute("ROLLBACK")
+            flash("This purchase submission was already processed.", "error")
+            return redirect(url_for("five_sim_orders"))
+        except Exception:
+            if d.in_transaction: d.execute("ROLLBACK")
+            current_app.logger.exception("Could not reserve wallet funds for purchase")
+            flash("Could not reserve wallet funds. No provider order was submitted.", "error")
+            return redirect(url_for("wallet_page"))
+
+        try:
+            result = five_sim.buy_activation(country, "any", product)
+            if not isinstance(result, dict) or result.get("id") is None or not result.get("phone"):
+                d.execute("UPDATE five_sim_purchase_attempts SET status='uncertain',error=?,updated_at=? WHERE token=?", ("Unclear provider response; manual reconciliation required", now(), token))
+                flash("5SIM response is uncertain. Your order is flagged for reconciliation; do not submit it again.", "error")
+                return redirect(url_for("five_sim_orders"))
+            order_id = str(result["id"]); phone = str(result["phone"])
+            d.execute("BEGIN IMMEDIATE")
+            d.execute("INSERT INTO five_sim_orders(user_id,provider_order_id,phone,country,product,status,sms_json,created_at,updated_at,customer_charge_kobo) VALUES(?,?,?,?,?,?,?,?,?,?)", (uid, order_id, phone, country, product, str(result.get("status", "PENDING")), json.dumps(result.get("sms", []), ensure_ascii=False), now(), now(), charge))
+            d.execute("UPDATE five_sim_purchase_attempts SET status='succeeded',provider_order_id=?,updated_at=? WHERE token=?", (order_id, now(), token))
+            d.execute("COMMIT")
+            flash(f"Number purchased successfully. Wallet charged ₦{charge / 100:.2f}.", "ok")
+            return redirect(url_for("five_sim_orders"))
+        except five_sim.FiveSimError as exc:
+            # Only explicitly definitive provider rejections are refundable.
+            if getattr(exc, "definitive", False):
+                d.execute("BEGIN IMMEDIATE")
+                attempt = d.execute("SELECT refund_applied FROM five_sim_purchase_attempts WHERE token=?", (token,)).fetchone()
+                if attempt and not attempt["refund_applied"]:
+                    stamp = now()
+                    d.execute("INSERT INTO ledger(user_id,amount_cents,kind,note,created_at) VALUES(?,?,?,?,?)", (uid, charge, "purchase_refund", f"Refund for rejected 5SIM {product} order", stamp))
+                    d.execute("UPDATE five_sim_purchase_attempts SET status='failed',error=?,refund_applied=1,updated_at=? WHERE token=?", (str(exc)[:300], stamp, token))
+                d.execute("COMMIT")
+                flash("5SIM rejected the order. Your wallet has been refunded.", "error")
+            else:
+                d.execute("UPDATE five_sim_purchase_attempts SET status='uncertain',error=?,updated_at=? WHERE token=?", (str(exc)[:300], now(), token))
+                flash("5SIM could not confirm the result. The purchase is marked uncertain; funds are held to prevent a duplicate order.", "error")
+            return redirect(url_for("five_sim_orders"))
+        except Exception:
+            current_app.logger.exception("5SIM purchase outcome needs reconciliation")
+            if d.in_transaction: d.execute("ROLLBACK")
+            d.execute("UPDATE five_sim_purchase_attempts SET status='uncertain',error=?,updated_at=? WHERE token=?", ("Unexpected response or local persistence failure; reconcile with 5SIM before refunding", now(), token))
+            flash("The purchase outcome is uncertain. Do not retry; contact support to reconcile with 5SIM.", "error")
+            return redirect(url_for("five_sim_orders"))
 
     @app.get("/5sim/orders")
     @login_required
