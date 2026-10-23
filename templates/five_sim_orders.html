@@ -12,6 +12,7 @@
     <h2>{{ r.product }} — {{ r.country|title }}</h2>
     <p><strong>Number:</strong> {{ r.phone }}</p>
     <p><strong>Status:</strong> {{ r.status }}</p>
+    <p><strong>Charged:</strong> ₦{{ "%.2f"|format(r.customer_charge_kobo / 100) }}</p>
     <p><strong>Order ID:</strong> {{ r.provider_order_id }}</p>
     <p><strong>Created:</strong> {{ r.created_at }} UTC</p>
     <p><strong>Last checked:</strong> {{ r.updated_at }} UTC</p>

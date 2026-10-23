@@ -3,8 +3,7 @@
 <h1>5SIM Catalogue</h1>
 
 <div class="card">
-  <p>Browse 5SIM services and reported prices. Purchasing a number spends
-  funds from your 5SIM account. No NumberHub wallet is used.</p>
+  <p>Browse available services. Purchases are charged to your NumberHub wallet in Nigerian naira. Prices include the configured exchange rate and service markup; the final price and stock are rechecked before ordering.</p>
   <p><a href="{{ url_for('five_sim_orders') }}">View my 5SIM orders</a></p>
 
   {% if error %}
@@ -37,7 +36,7 @@
         <thead>
           <tr>
             <th>Service</th><th>Category</th><th>Quantity</th>
-            <th>Reported price</th><th>Action</th>
+            <th>5SIM price (USD)</th><th>Your price (NGN)</th><th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -47,14 +46,16 @@
               <td>{{ details.get('Category', '—') }}</td>
               <td>{{ details.get('Qty', '—') }}</td>
               <td>{{ details.get('Price', '—') }}</td>
+              <td>{% if customer_prices.get(name) %}₦{{ '%.2f'|format(customer_prices.get(name) / 100) }}{% else %}Unavailable{% endif %}</td>
               <td>
                 {% if details.get('Category') == 'activation' and (details.get('Qty', 0)|int > 0) %}
                   <form method="post" action="{{ url_for('five_sim_buy') }}"
-                        onsubmit="return confirm('This submits a real purchase request to 5SIM and may spend your 5SIM balance. Continue only if you intend to purchase?');">
+                        onsubmit="return confirm('Confirm this purchase using your NumberHub wallet? The displayed price may change if 5SIM updates its catalogue.');">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="country" value="{{ selected_country }}">
                     <input type="hidden" name="product" value="{{ name }}">
-                    <button type="submit">Buy number</button>
+                    <input type="hidden" name="purchase_token" value="{{ purchase_token }}">
+                    <button type="submit" {% if not customer_prices.get(name) %}disabled{% endif %}>Buy number</button>
                   </form>
                 {% else %}
                   Not available to order
