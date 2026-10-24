@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "NumberHub",
+  "short_name": "NumberHub",
+  "description": "Your NumberHub virtual number dashboard",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#155eef",
+  "icons": [
+    {
+      "src": "/static/icons/numberhub-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/numberhub-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

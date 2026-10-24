@@ -1,6 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#155eef">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <title>NumberHub</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
 <body>
 <header><a class="brand" href="/">NumberHub</a>
@@ -14,4 +16,12 @@
 {% if provider().mode == 'unconfigured' %}<div class="banner err">{{ provider().message }}</div>{% endif %}
 {% for c, m in get_flashed_messages(with_categories=true) %}<div class="flash {{ c }}">{{ m }}</div>{% endfor %}
 {% block body %}{% endblock %}
-</main><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>
+</main><script src="{{ url_for('static', filename='app.js') }}"></script><script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/static/sw.js")
+      .catch(error => console.error("NumberHub service worker:", error));
+  });
+}
+</script>
+</body></html>
